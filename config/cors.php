@@ -22,6 +22,8 @@ return [
         'http://127.0.0.1:8000',
         'https://localhost:5173',
         'https://127.0.0.1:8000',
+        'https://hvacweb.acrtfm.com',
+        'hvacweb.acrtfm.com'
     ],
     'allowed_origins_patterns' => [],
     'allowed_headers' => ['*'],
