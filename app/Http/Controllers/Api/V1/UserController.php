@@ -34,6 +34,7 @@ class UserController extends Controller
             return response()->json([
                 'status' => true,
                 'message' => 'User created successfully. Please check your email to verify your account.',
+                'name' => $user->name,
                 'user' => $user
             ], 200);    
 
@@ -132,7 +133,8 @@ class UserController extends Controller
             // $token = $user->createToken('auth_token')->plainTextToken;
             return response()->json([
                 'status' => true,
-                'token' => $token
+                'token' => $token,
+                'name' => auth()->user()->name
             ], 200);
         } catch (JWTException $e) {
             logHelper()->logInfo($e->getMessage());
