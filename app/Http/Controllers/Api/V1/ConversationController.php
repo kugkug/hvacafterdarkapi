@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Models\Conversation;
 use App\Models\ConversationCategory;
+use App\Models\Message;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -196,6 +197,47 @@ class ConversationController extends Controller
         ]);
     }
 
+    public function update(Request $request, int $id): JsonResponse
+    {
+        $conversation = Conversation::find($id);
+        $user = $request->user();
+
+        if (! $conversation || ! $conversation->hasParticipant($user)) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Conversation not found.',
+            ], 404);
+        }
+
+        if (! $conversation->isCreator($user)) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Only the room creator can update this conversation.',
+            ], 403);
+        }
+
+        if ($conversation->isClosed()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Cannot update a closed room.',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'name' => 'nullable|string|max:255',
+            'category_id' => 'nullable|integer|exists:conversation_categories,id',
+        ]);
+
+        $conversation->update($validated);
+        $conversation->load(['users:id,name', 'creator:id,name', 'category:id,name,slug']);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Conversation updated.',
+            'data' => $this->conversationData($conversation, $user),
+        ]);
+    }
+
     public function markRead(Request $request, int $id): JsonResponse
     {
         $conversation = Conversation::find($id);
@@ -364,6 +406,42 @@ class ConversationController extends Controller
             'status' => true,
             'message' => 'User banned.',
             'data' => $this->conversationData($conversation, $user),
+        ]);
+    }
+
+    public function destroyMessage(Request $request, int $id, int $messageId): JsonResponse
+    {
+        $conversation = Conversation::find($id);
+        $user = $request->user();
+
+        if (! $conversation || ! $conversation->hasParticipant($user)) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Conversation not found.',
+            ], 404);
+        }
+
+        $message = Message::where('conversation_id', $id)->find($messageId);
+
+        if (! $message) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Message not found.',
+            ], 404);
+        }
+
+        if ((int) $message->user_id !== (int) $user->id) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Only the sender can remove this message.',
+            ], 403);
+        }
+
+        $message->delete();
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Message removed.',
         ]);
     }
 

@@ -47,6 +47,37 @@ class UserController extends Controller
         }
     }
 
+    public function search(Request $request): JsonResponse
+    {
+        try {
+            $query = $request->query->get('q', '');
+            $query = trim((string) $query);
+
+            if ($query === '') {
+                return response()->json([
+                    'status' => true,
+                    'data' => []
+                ], 200);
+            }
+
+            $users = User::where('name', 'like', '%' . $query . '%')
+                ->orWhere('email', 'like', '%' . $query . '%')
+                ->limit(10)
+                ->get();
+
+            return response()->json([
+                'status' => true,
+                'data' => $users
+            ], 200);
+        } catch (Exception $e) {
+            logHelper()->logInfo($e->getMessage());
+            return response()->json([
+                'status' => false,
+                'message' => 'Cannot continue, please try again later!'
+            ], 500);
+        }
+    }
+
     public function index() {
         try {
             $users = User::paginate(10);

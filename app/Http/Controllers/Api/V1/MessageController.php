@@ -118,4 +118,65 @@ class MessageController extends Controller
             ],
         ], 201);
     }
+
+    public function update(Request $request, int $conversationId, int $messageId): JsonResponse
+    {
+        $validated = $request->validate([
+            'body' => 'required|string|max:65535',
+        ]);
+
+        $conversation = Conversation::find($conversationId);
+
+        if (! $conversation || ! $conversation->hasParticipant($request->user())) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Conversation not found.',
+            ], 404);
+        }
+
+        $message = $conversation->messages()->where('id', $messageId)->first();
+
+        if (! $message) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Message not found.',
+            ], 404);
+        }
+
+        if ($message->user_id !== $request->user()->id) {
+            return response()->json([
+                'status' => false,
+                'message' => 'You are not authorized to edit this message.',
+            ], 403);
+        }
+
+        if ($conversation->isClosed()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Cannot edit messages in a closed room.',
+            ], 422);
+        }
+
+        $message->body = $validated['body'];
+        $message->save();
+
+        $message->load('user:id,name');
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Message updated.',
+            'data' => [
+                'id' => $message->id,
+                'conversation_id' => $message->conversation_id,
+                'user_id' => $message->user_id,
+                'body' => $message->body,
+                'created_at' => $message->created_at->toIso8601String(),
+                'updated_at' => $message->updated_at->toIso8601String(),
+                'user' => [
+                    'id' => $message->user->id,
+                    'name' => $message->user->name,
+                ],
+            ],
+        ]);
+    }
 }

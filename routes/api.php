@@ -23,6 +23,7 @@ Route::middleware('auth:api')->group(function() {
     Route::prefix('v1')->group(function () {
         Route::prefix('user')->group(function () {
             Route::get('/all', [UserController::class, 'index']);
+            Route::get('/search', [UserController::class, 'search']);
             Route::get('/{id}', [UserController::class, 'show']);
             Route::post('/update/{id}', [UserController::class, 'update']);
             Route::delete('/delete/{id}', [UserController::class, 'delete']);
@@ -48,6 +49,7 @@ Route::middleware('auth:api')->group(function() {
             Route::get('/', [ConversationController::class, 'index']);
             Route::get('/categorized', [ConversationController::class, 'indexGroupedByCategory']);
             Route::post('/', [ConversationController::class, 'store']);
+            Route::put('/{id}', [ConversationController::class, 'update']);
             Route::post('/{id}/close', [ConversationController::class, 'close']);
             Route::post('/{id}/invite', [ConversationController::class, 'invite']);
             Route::delete('/{id}/participants/{userId}', [ConversationController::class, 'remove']);
@@ -55,6 +57,8 @@ Route::middleware('auth:api')->group(function() {
             Route::post('/{id}/read', [ConversationController::class, 'markRead']);
             Route::get('/{id}/messages', [MessageController::class, 'index']);
             Route::post('/{id}/messages', [MessageController::class, 'store'])->middleware('throttle:60,1');
+            Route::delete('/{id}/messages/{messageId}', [ConversationController::class, 'destroyMessage']);
+            Route::put('/{conversationId}/messages/{messageId}', [MessageController::class, 'update']);
             Route::get('/{id}', [ConversationController::class, 'show']);
         });
     });
