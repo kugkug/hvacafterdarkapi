@@ -45,6 +45,12 @@ Route::middleware('auth:api')->group(function() {
             Route::get('/{image_type?}', [ImageUploadController::class, 'index']);
         });
 
+        Route::prefix('messages')->group(function () {
+            Route::post('private', [MessageController::class, 'sendPrivate'])->middleware('throttle:60,1');
+            Route::get('private/{recipientId}', [MessageController::class, 'privateIndex']);
+            Route::get('contacts', [MessageController::class, 'privateContacts']);
+        });
+
         Route::prefix('conversations')->group(function () {
             Route::get('/', [ConversationController::class, 'index']);
             Route::get('/categorized', [ConversationController::class, 'indexGroupedByCategory']);

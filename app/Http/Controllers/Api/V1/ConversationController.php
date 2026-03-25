@@ -61,14 +61,28 @@ class ConversationController extends Controller
 
     public function indexGroupedByCategory(Request $request): JsonResponse
     {
+        $user = $request->user();
+
         $categories = ConversationCategory::with([
-            'conversations' => function ($q) {
+            'conversations' => function ($q) use ($user) {
                 $q->where('type', 'group')
+                    ->whereHas('users', function ($query) use ($user) {
+                        $query->where('users.id', $user->id);
+                    })
                     ->with(['users:id,name', 'creator:id,name'])
                     ->withCount('users')
                     ->orderByDesc('updated_at');
             },
         ])->orderBy('name')->get();
+
+        // $categories = ConversationCategory::with([
+        //     'conversations' => function ($q) {
+        //         $q->where('type', 'group')
+        //             ->with(['users:id,name', 'creator:id,name'])
+        //             ->withCount('users')
+        //             ->orderByDesc('updated_at');
+        //     },
+        // ])->orderBy('name')->get();
 
         $user = $request->user();
         $data = $categories
