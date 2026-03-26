@@ -80,6 +80,7 @@ class MessageController extends Controller
      */
     public function privateIndex(Request $request, int $otherUserId): JsonResponse
     {
+        
         $user = $request->user();
 
         $perPage = (int) $request->get('per_page', 200);
@@ -197,11 +198,11 @@ class MessageController extends Controller
     {
         $user = $request->user();
         $validated = $request->validate([
-            'recipient_id' => ['required', 'integer', 'exists:users,id'],
+            'recipient_id' => ['required', 'string', 'exists:users,id'],
             'body' => 'required|string|max:65535',
         ]);
 
-        $conversation = Conversation::findOrCreateDirect($user, $validated['recipient_id']);
+        $conversation = Conversation::findOrCreateDirect($user, (int) $validated['recipient_id']);
 
         if ($conversation->isClosed()) {
             return response()->json([
@@ -221,17 +222,84 @@ class MessageController extends Controller
 
         $recipient = $conversation->users->firstWhere('id', '!=', $user->id);
 
+        $includeMessages = (bool) ($validated['include_messages'] ?? false);
+        if (! $includeMessages) {
+            return response()->json([
+                'status' => true,
+                'message' => 'Message sent.',
+                'data' => [
+                    'conversation_id' => $conversation->id,
+                    'id' => $message->id,
+                    'user_id' => $message->user_id,
+                    'body' => $message->body,
+                    'created_at' => $message->created_at->toIso8601String(),
+                    'user' => ['id' => $message->user->id, 'name' => $message->user->name],
+                    'recipient' => $recipient ? ['id' => $recipient->id, 'name' => $recipient->name] : null,
+                ],
+            ], 201);
+        }
+
+        $perPage = (int) ($validated['per_page'] ?? 200);
+        $perPage = min(max($perPage, 1), 100);
+
+        $messages = $conversation->messages()
+            ->with('user:id,name,email')
+            ->orderByDesc('created_at')
+            ->paginate($perPage);
+
+        $messages->getCollection()->transform(function (Message $m) {
+            return [
+                'id' => $m->id,
+                'conversation_id' => $m->conversation_id,
+                'user_id' => $m->user_id,
+                'body' => $m->body,
+                'created_at' => $m->created_at->toIso8601String(),
+                'created_time' => $m->created_at->format('H:i A'),
+                'created_date' => $m->created_at->format('Y-m-d'),
+                'user' => ['id' => $m->user->id, 'name' => $m->user->name, 'email' => $m->user->email],
+            ];
+        });
+
+        $conversationData = [
+            'id' => $conversation->id,
+            'type' => $conversation->type,
+            'category' => $conversation->category ? ['id' => $conversation->category->id, 'name' => $conversation->category->name, 'slug' => $conversation->category->slug] : null,
+            'name' => $conversation->name,
+            'created_by' => $conversation->created_by ? ['id' => $conversation->creator?->id, 'name' => $conversation->creator?->name] : null,
+            'is_creator' => $conversation->created_by ? $conversation->isCreator($user) : null,
+            'is_closed' => $conversation->isClosed(),
+            'closed_at' => $conversation->closed_at?->toIso8601String(),
+            'participants' => $conversation->users->map(fn ($u) => ['id' => $u->id, 'name' => $u->name])->values()->all(),
+        ];
+
         return response()->json([
             'status' => true,
             'message' => 'Message sent.',
+            'conversation' => $conversationData,
             'data' => [
-                'conversation_id' => $conversation->id,
                 'id' => $message->id,
+                'conversation_id' => $conversation->id,
+                'conversation_id' => $conversation->id,
+                'conversation_id' => $conversation->id,
                 'user_id' => $message->user_id,
                 'body' => $message->body,
                 'created_at' => $message->created_at->toIso8601String(),
                 'user' => ['id' => $message->user->id, 'name' => $message->user->name],
                 'recipient' => $recipient ? ['id' => $recipient->id, 'name' => $recipient->name] : null,
+            ],
+            'messages' => $messages->items(),
+            'meta' => [
+                'current_page' => $messages->currentPage(),
+                'last_page' => $messages->lastPage(),
+                'per_page' => $messages->perPage(),
+                'total' => $messages->total(),
+            ],
+            'messages' => $messages->items(),
+            'meta' => [
+                'current_page' => $messages->currentPage(),
+                'last_page' => $messages->lastPage(),
+                'per_page' => $messages->perPage(),
+                'total' => $messages->total(),
             ],
         ], 201);
     }
