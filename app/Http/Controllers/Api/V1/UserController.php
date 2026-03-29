@@ -3,10 +3,16 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\V1;
 
 use App\Models\User;
+use App\Models\UploadedImage;
 use Exception;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Routing\Controller;
-use Symfony\Component\HttpFoundation\Request;
+use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Tymon\JWTAuth\Exceptions\JWTException;
 use Tymon\JWTAuth\Facades\JWTAuth;
 
@@ -50,6 +56,7 @@ class UserController extends Controller
     public function search(Request $request): JsonResponse
     {
         try {
+            $authUser = $request->user();
             $query = $request->query->get('q', '');
             $query = trim((string) $query);
 
@@ -60,8 +67,18 @@ class UserController extends Controller
                 ], 200);
             }
 
-            $users = User::where('name', 'like', '%' . $query . '%')
-                ->orWhere('email', 'like', '%' . $query . '%')
+            $usersQuery = User::query();
+            if (! $authUser?->isAdmin()) {
+                if (Schema::hasColumn('users', 'searchable')) {
+                    $usersQuery->where('searchable', true);
+                }
+            }
+
+            $users = $usersQuery
+                ->where(function ($q) use ($query) {
+                    $q->where('name', 'like', '%' . $query . '%')
+                        ->orWhere('email', 'like', '%' . $query . '%');
+                })
                 ->limit(10)
                 ->get();
 
@@ -101,6 +118,51 @@ class UserController extends Controller
         }
     }
 
+    public function me(Request $request): JsonResponse
+    {
+        try {
+            $auth = $request->user();
+            if (! $auth) {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Unauthenticated.',
+                ], 401);
+            }
+
+            $query = User::query()->whereKey($auth->id);
+            if (Schema::hasColumn('users', 'profile_image_id')) {
+                $query->with('profileImage:id,s3_url,original_name,image_type');
+            }
+
+            $user = $query->firstOrFail();
+            
+            if ($user) {
+                if (isset($user->created_at)) {
+                    $user->created_at_formatted = $user->created_at->format('M d, Y H:i a');
+                }
+                if (isset($user->updated_at)) {
+                    $user->updated_at_formatted = $user->updated_at->format('M d, Y H:i a');
+                }
+
+                $user->searchable = $user->searchable ? 'YES' : 'NO';
+            }
+
+
+
+
+            return response()->json([
+                'status' => true,
+                'data' => $user,
+            ], 200);
+        } catch (Exception $e) {
+            logHelper()->logInfo($e->getMessage());
+            return response()->json([
+                'status' => false,
+                'message' => 'Cannot continue, please try again later!',
+            ], 500);
+        }
+    }
+
     public function show($id) {
         try {
             $user = User::where('id', $id)->get();
@@ -125,8 +187,216 @@ class UserController extends Controller
         }
     }
     
-    public function update() {
-        return response()->json(['message' => 'User updated']);
+    /**
+     * Update the authenticated user's profile: name, email, searchable, and/or profile image.
+     * Use multipart/form-data when sending `image`.
+     */
+    public function update(Request $request): JsonResponse
+    {
+        try {
+            $user = $request->user();
+            if (! $user) {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Unauthenticated.',
+                ], 401);
+            }
+
+            $rules = [
+                'name' => 'sometimes|string|max:255',
+                'image' => 'sometimes|file|image|mimes:jpeg,jpg,png,gif,webp|max:5120',
+            ];
+            
+            if (Schema::hasColumn('users', 'searchable')) {
+                $rules['searchable'] = 'sometimes|boolean';
+            }
+
+            $validated = $request->validate($rules, [
+                'image.image' => 'The file must be an image.',
+            ]);
+
+            if (isset($validated['name'])) {
+                $user->name = $validated['name'];
+            }
+            if (isset($validated['email'])) {
+                $user->email = $validated['email'];
+            }
+            if (Schema::hasColumn('users', 'searchable') && array_key_exists('searchable', $validated)) {
+                $user->searchable = (bool) $validated['searchable'];
+            }
+
+            if ($request->hasFile('image')) {
+                if (! Schema::hasColumn('users', 'profile_image_id')) {
+                    return response()->json([
+                        'status' => false,
+                        'message' => 'Profile image is not enabled yet. Please run database migrations.',
+                    ], 500);
+                }
+                $uploadedImage = $this->createProfileImageRecord($user, $request->file('image'));
+                $user->profile_image_id = $uploadedImage->id;
+            }
+
+            if (! $user->isDirty() && ! $request->hasFile('image')) {
+                $query = User::query()->whereKey($user->id);
+                if (Schema::hasColumn('users', 'profile_image_id')) {
+                    $query->with('profileImage:id,s3_url,original_name,image_type');
+                }
+
+                return response()->json([
+                    'status' => true,
+                    'message' => 'No changes submitted.',
+                    'data' => $query->firstOrFail(),
+                ], 200);
+            }
+
+            $user->save();
+
+            $query = User::query()->whereKey($user->id);
+            if (Schema::hasColumn('users', 'profile_image_id')) {
+                $query->with('profileImage:id,s3_url,original_name,image_type');
+            }
+            $fresh = $query->firstOrFail();
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Profile updated.',
+                'data' => $fresh,
+            ], 200);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Validation failed.',
+                'errors' => $e->errors(),
+            ], 422);
+        } catch (Exception $e) {
+            logHelper()->logInfo($e->getMessage());
+            return response()->json([
+                'status' => false,
+                'message' => 'Cannot continue, please try again later!',
+            ], 500);
+        }
+    }
+
+    public function uploadProfilePicture(Request $request): JsonResponse
+    {
+        try {
+            $user = $request->user();
+
+            if (! Schema::hasColumn('users', 'profile_image_id')) {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Profile image is not enabled yet. Please run database migrations.',
+                ], 500);
+            }
+
+            $request->validate([
+                'image' => 'required|file|image|mimes:jpeg,jpg,png,gif,webp|max:5120',
+            ], [
+                'image.required' => 'Please select an image to upload.',
+                'image.image' => 'The file must be an image.',
+            ]);
+
+            $uploadedImage = $this->createProfileImageRecord($user, $request->file('image'));
+            $user->profile_image_id = $uploadedImage->id;
+            $user->save();
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Profile picture updated.',
+                'data' => [
+                    'profile_image' => [
+                        'id' => $uploadedImage->id,
+                        'original_name' => $uploadedImage->original_name,
+                        's3_url' => $uploadedImage->s3_url,
+                        'image_type' => $uploadedImage->image_type,
+                    ],
+                ],
+            ], 200);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Validation failed.',
+                'errors' => $e->errors(),
+            ], 422);
+        } catch (Exception $e) {
+            logHelper()->logInfo($e->getMessage());
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to upload profile picture. Please try again.',
+            ], 500);
+        }
+    }
+
+    public function setSearchable(Request $request): JsonResponse
+    {
+        try {
+            $user = $request->user();
+
+            if (! Schema::hasColumn('users', 'searchable')) {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Search toggle is not enabled yet. Please run database migrations.',
+                ], 500);
+            }
+
+            $validated = $request->validate([
+                'searchable' => 'required|boolean',
+            ]);
+
+            $user->searchable = (bool) $validated['searchable'];
+            $user->save();
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Search setting updated.',
+                'data' => [
+                    'id' => $user->id,
+                    'searchable' => $user->searchable,
+                ],
+            ], 200);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Validation failed.',
+                'errors' => $e->errors(),
+            ], 422);
+        } catch (Exception $e) {
+            logHelper()->logInfo($e->getMessage());
+            return response()->json([
+                'status' => false,
+                'message' => 'Cannot continue, please try again later!',
+            ], 500);
+        }
+    }
+
+    private function createProfileImageRecord(User $user, UploadedFile $file): UploadedImage
+    {
+        $originalName = $file->getClientOriginalName();
+        $mimeType = $file->getMimeType();
+        $size = $file->getSize();
+
+        $extension = $file->getClientOriginalExtension() ?: $file->guessExtension();
+        $safeName = Str::slug(pathinfo($originalName, PATHINFO_FILENAME));
+        $uniqueName = Str::uuid()->toString();
+        $filename = $uniqueName . '-' . $safeName . '.' . $extension;
+
+        $s3Directory = 'profile_images/' . date('Y/m/d');
+        /** @var \Illuminate\Filesystem\FilesystemAdapter $s3 */
+        $s3 = Storage::disk('s3');
+        $s3Key = $s3->putFileAs($s3Directory, $file, $filename);
+        /** @noinspection PhpUndefinedMethodInspection */
+        $url = $s3->url($s3Key);
+
+        return UploadedImage::create([
+            'user_id' => $user->id,
+            'original_name' => $originalName,
+            'image_type' => 'profile',
+            's3_key' => $s3Key,
+            's3_url' => $url,
+            'mime_type' => $mimeType,
+            'size' => $size,
+            'disk' => 's3',
+        ]);
     }
 
     public function delete() {
@@ -151,27 +421,19 @@ class UserController extends Controller
                     'message' => 'Invalid username or password.'
                 ]);
             }   
-            
-            // if (!auth()->guard()->attempt($validated['validated'])) {
-            //     logHelper()->logInfo('Invalid username or password.');
-            //     return response()->json([
-            //         'status' => 'error',
-            //         'message' => 'Invalid username or password.'
-            //     ]);
-            // }
+            JWTAuth::setToken($token);
+            $authUser = JWTAuth::toUser($token);
 
-            // $user = auth()->guard()->user();
-            // $token = $user->createToken('auth_token')->plainTextToken;
             return response()->json([
                 'status' => true,
                 'token' => $token,
-                'name' => auth()->user()->name
+                'name' => $authUser->name
             ], 200);
         } catch (JWTException $e) {
-            logHelper()->logInfo($e->getMessage());
+            logHelper()->logInfo($e->getTraceAsString());
             return response()->json([
                 'status' => false,
-                'message' => 'Failed to add user!'
+                'message' => 'Failed to login!'
             ], 500);
         } catch (Exception $e) {
             logHelper()->logInfo($e->getMessage());

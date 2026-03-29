@@ -24,8 +24,12 @@ Route::middleware('auth:api')->group(function() {
         Route::prefix('user')->group(function () {
             Route::get('/all', [UserController::class, 'index']);
             Route::get('/search', [UserController::class, 'search']);
+            Route::get('/me', [UserController::class, 'me']);
             Route::get('/{id}', [UserController::class, 'show']);
-            Route::post('/update/{id}', [UserController::class, 'update']);
+            
+            Route::post('/update', [UserController::class, 'update']);
+            Route::post('/profile-picture', [UserController::class, 'uploadProfilePicture']);
+            Route::post('/searchable', [UserController::class, 'setSearchable']);
             Route::delete('/delete/{id}', [UserController::class, 'delete']);
 
             Route::post('/logout', [UserController::class, 'logout']);

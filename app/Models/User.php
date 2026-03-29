@@ -4,6 +4,7 @@ namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
@@ -26,6 +27,8 @@ class User extends Authenticatable implements JWTSubject
         'email',
         'password',
         'role',
+        'profile_image_id',
+        'searchable',
     ];
 
     /**
@@ -81,5 +84,10 @@ class User extends Authenticatable implements JWTSubject
         return $this->belongsToMany(Conversation::class, 'conversation_user')
             ->withPivot('last_read_at')
             ->withTimestamps();
+    }
+
+    public function profileImage(): BelongsTo
+    {
+        return $this->belongsTo(UploadedImage::class, 'profile_image_id');
     }
 }
