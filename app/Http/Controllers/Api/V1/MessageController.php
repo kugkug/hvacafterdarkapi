@@ -5,12 +5,12 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\V1;
 
 use App\Events\MessageSent;
+use App\Events\PrivateMessageReceived;
 use App\Models\Conversation;
 use App\Models\Message;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
-use Illuminate\Validation\Rule;
 
 class MessageController extends Controller
 {
@@ -175,6 +175,7 @@ class MessageController extends Controller
         $message->load('user:id,name');
 
         broadcast(new MessageSent($message))->toOthers();
+        $this->broadcastPrivateMessageInbox($message, $conversation);
 
         return response()->json([
             'status' => true,
@@ -219,6 +220,7 @@ class MessageController extends Controller
         $message->load('user:id,name');
 
         broadcast(new MessageSent($message))->toOthers();
+        $this->broadcastPrivateMessageInbox($message, $conversation);
 
         $recipient = $conversation->users->firstWhere('id', '!=', $user->id);
 
@@ -279,8 +281,6 @@ class MessageController extends Controller
             'data' => [
                 'id' => $message->id,
                 'conversation_id' => $conversation->id,
-                'conversation_id' => $conversation->id,
-                'conversation_id' => $conversation->id,
                 'user_id' => $message->user_id,
                 'body' => $message->body,
                 'created_at' => $message->created_at->toIso8601String(),
@@ -294,14 +294,26 @@ class MessageController extends Controller
                 'per_page' => $messages->perPage(),
                 'total' => $messages->total(),
             ],
-            'messages' => $messages->items(),
-            'meta' => [
-                'current_page' => $messages->currentPage(),
-                'last_page' => $messages->lastPage(),
-                'per_page' => $messages->perPage(),
-                'total' => $messages->total(),
-            ],
         ], 201);
+    }
+
+    /**
+     * Notify the other participant on their private user channel (DM inbox).
+     * Conversation channel still receives {@see MessageSent} as `message.sent`.
+     */
+    private function broadcastPrivateMessageInbox(Message $message, Conversation $conversation): void
+    {
+        if ($conversation->type !== 'direct') {
+            return;
+        }
+
+        $recipientId = $conversation->users()
+            ->where('users.id', '!=', $message->user_id)
+            ->value('users.id');
+
+        if ($recipientId) {
+            broadcast(new PrivateMessageReceived($message, (int) $recipientId));
+        }
     }
 
     public function update(Request $request, int $conversationId, int $messageId): JsonResponse
