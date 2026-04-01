@@ -301,7 +301,12 @@ class MessageController extends Controller
      * Notify the other participant on their private user channel (DM inbox).
      * Conversation channel still receives {@see MessageSent} as `message.sent`.
      */
-    private function broadcastPrivateMessageInbox(Message $message, Conversation $conversation): void
+    private function broadcastPrivateMessageInbox(
+        Message $message,
+        Conversation $conversation,
+        string $eventName = 'private.message',
+        ?array $payload = null
+    ): void
     {
         if ($conversation->type !== 'direct') {
             return;
@@ -312,7 +317,7 @@ class MessageController extends Controller
             ->value('users.id');
 
         if ($recipientId) {
-            broadcast(new PrivateMessageReceived($message, (int) $recipientId));
+            broadcast(new PrivateMessageReceived($message, (int) $recipientId, $eventName, $payload));
         }
     }
 
@@ -358,6 +363,8 @@ class MessageController extends Controller
         $message->save();
 
         $message->load('user:id,name');
+        broadcast(new MessageSent($message, 'message.updated'))->toOthers();
+        $this->broadcastPrivateMessageInbox($message, $conversation, 'private.message.updated');
 
         return response()->json([
             'status' => true,

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Events\MessageSent;
+use App\Events\PrivateMessageReceived;
 use App\Models\Conversation;
 use App\Models\ConversationCategory;
 use App\Models\Message;
@@ -451,12 +453,45 @@ class ConversationController extends Controller
             ], 403);
         }
 
+        $deletedPayload = [
+            'conversation_type' => $conversation->type,
+            'message' => [
+                'id' => $message->id,
+                'conversation_id' => $message->conversation_id,
+                'user_id' => $message->user_id,
+                'deleted_at' => now()->toIso8601String(),
+            ],
+        ];
+
+        broadcast(new MessageSent($message, 'message.deleted', $deletedPayload))->toOthers();
+        $this->broadcastPrivateMessageInbox($message, $conversation, 'private.message.deleted', $deletedPayload);
+
         $message->delete();
 
         return response()->json([
             'status' => true,
             'message' => 'Message removed.',
         ]);
+    }
+
+    private function broadcastPrivateMessageInbox(
+        Message $message,
+        Conversation $conversation,
+        string $eventName,
+        ?array $payload = null
+    ): void
+    {
+        if ($conversation->type !== 'direct') {
+            return;
+        }
+
+        $recipientId = $conversation->users()
+            ->where('users.id', '!=', $message->user_id)
+            ->value('users.id');
+
+        if ($recipientId) {
+            broadcast(new PrivateMessageReceived($message, (int) $recipientId, $eventName, $payload));
+        }
     }
 
     private function conversationData(Conversation $c, $user): array
