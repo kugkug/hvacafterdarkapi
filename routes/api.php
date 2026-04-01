@@ -15,6 +15,8 @@ Route::prefix('v1')->group(function () {
     Route::prefix('user')->group(function () {
         Route::post('/create', [UserController::class, 'create']);
         Route::post('/login', [UserController::class, 'login']);
+        Route::post('/forgot-password', [UserController::class, 'forgotPassword'])->middleware('throttle:5,1');
+        Route::post('/reset-password', [UserController::class, 'resetPassword']);
     });
 });
 
@@ -30,6 +32,7 @@ Route::middleware('auth:api')->group(function() {
             Route::post('/update', [UserController::class, 'update']);
             Route::post('/profile-picture', [UserController::class, 'uploadProfilePicture']);
             Route::post('/searchable', [UserController::class, 'setSearchable']);
+            Route::post('/send-email', [UserController::class, 'sendMailToUser'])->middleware('throttle:10,1');
             Route::delete('/delete/{id}', [UserController::class, 'delete']);
 
             Route::post('/logout', [UserController::class, 'logout']);

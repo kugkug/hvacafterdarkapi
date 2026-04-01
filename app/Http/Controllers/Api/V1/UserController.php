@@ -2,14 +2,18 @@
 declare(strict_types=1);
 namespace App\Http\Controllers\Api\V1;
 
+use App\Mail\GenericUserMail;
 use App\Models\User;
 use App\Models\UploadedImage;
+use Carbon\Carbon;
 use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Routing\Controller;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -49,6 +53,164 @@ class UserController extends Controller
             return response()->json([
                 'status' => 'error',
                 'message' => 'Failed to add user!'
+            ], 500);
+        }
+    }
+
+    public function forgotPassword(Request $request): JsonResponse
+    {
+        try {
+            $validated = $request->validate([
+                'email' => 'required|email',
+            ]);
+
+            // Generate a secure token
+            $token = hash('sha256', Str::random(60));
+
+            // Find user by email (do not reveal if user exists)
+            $user = \App\Models\User::where('email', $validated['email'])->first();
+
+            if ($user) {
+                // Save or update the password reset token in password_resets table
+                \DB::table('password_reset_tokens')->updateOrInsert(
+                    [
+                        'email' => $validated['email'],
+                    ],
+                    [
+                        'email' => $validated['email'],
+                        'token' => $token,
+                        'created_at' => now(),
+                    ]
+                );
+
+                // Build reset link (adjust route/URL if needed)
+                $frontend_url = config('app.frontend_url');
+                $resetLink = $frontend_url . '/reset-password?token=' . $token . '&email=' . urlencode($validated['email']);
+
+                // Update message to include link
+                // $mailMessage = $resetLink;
+
+                // Modify the mail object for downstream send
+                // (we override message argument below)
+                $GLOBALS['mailMessage'] = $resetLink;
+            } else {
+                // Always act as if email was sent, avoid enumeration
+                $GLOBALS['mailMessage'] = 'Hello, this is a password reset link from HVAC After Dark. Please check your email for further instructions.';    
+            }
+
+            Mail::to($validated['email'])->send(new GenericUserMail(
+                subject: 'Password Reset',
+                message: $GLOBALS['mailMessage']
+            ));
+
+            // Avoid account enumeration by always returning the same message.
+            return response()->json([
+                'status' => true,
+                'message' => 'If an account exists for that email, a password reset link has been sent.',
+            ], 200);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Validation failed.',
+                'errors' => $e->errors(),
+            ], 422);
+        } catch (Exception $e) {
+            logHelper()->logInfo($e->getMessage());
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to process forgot password request.',
+            ], 500);
+        }
+    }
+
+    public function resetPassword(Request $request): JsonResponse
+    {
+        try {
+            $validated = $request->validate([
+                'email' => 'required|email',
+                'token' => 'required|string',
+                'password' => 'required|string|min:8|confirmed',
+            ]);
+            
+            $reset_data = \DB::table('password_reset_tokens')->where('email', $request->email)->first();
+            $token = $reset_data->token;
+            $created_at = $reset_data->created_at;
+            
+            $token_lifetime = config('auth.passwords.users.expire');
+            if (!$token_lifetime) {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Token lifetime not found.',
+                ], 500);
+            }
+            
+            $token_lifetime = $token_lifetime * 60;
+            $token_expiry_time = Carbon::parse($created_at)->addSeconds($token_lifetime);
+            
+            if ($token_expiry_time < now()) {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Token expired.',
+                ], 400);
+            }
+            
+            if ($token !== $validated['token']) {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Invalid token.',
+                ], 400);
+            }
+            
+            $user = User::where('email', $validated['email'])->first();
+            $user->password = Hash::make($validated['password']);
+            $user->save();
+            
+            \DB::table('password_reset_tokens')->where('email', $validated['email'])->delete();
+            
+            return response()->json([
+                'status' => true,
+                'message' => 'Password reset successfully. Please login with your new password.',
+            ], 200);  
+        }
+        catch (ValidationException $e) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Validation failed.',
+                'errors' => $e->errors(),
+            ], 422);
+        }
+    }
+        
+
+    public function sendMailToUser(Request $request): JsonResponse
+    {
+        try {
+            $validated = $request->validate([
+                'email' => 'required|email',
+                'subject' => 'sometimes|string|max:255',
+                'message' => 'sometimes|string|max:5000',
+            ]);
+
+            Mail::to($validated['email'])->send(new GenericUserMail(
+                $validated['subject'] ?? 'Notification',
+                $validated['message'] ?? 'Hello, this is a message from HVAC After Dark.'
+            ));
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Email sent successfully.',
+            ], 200);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Validation failed.',
+                'errors' => $e->errors(),
+            ], 422);
+        } catch (Exception $e) {
+            logHelper()->logInfo($e->getMessage());
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to send email.',
             ], 500);
         }
     }
